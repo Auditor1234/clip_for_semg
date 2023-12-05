@@ -26,7 +26,7 @@ def main(args):
     
     epochs = args.epochs
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, preprocess = clip.load("RN50", device=device, vis_pretrain=False)
+    model, _ = clip.load("RN50", device=device, vis_pretrain=False)
     
     # optimizer = Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.2)
     optimizer = Adam(model.parameters(), lr=args.lr, eps=1e-3)
@@ -79,7 +79,7 @@ def main(args):
     model.to(device)
     print("start training...")
     for epoch in range(epochs):
-        train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, preprocess, scheduler)
+        train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, scheduler)
         current_precision = validate_signal_text(model, device, val_loader, loss_func)
 
         if current_precision > best_precision:

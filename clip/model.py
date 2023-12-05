@@ -254,7 +254,7 @@ class CLIP(nn.Module):
                  transformer_width: int, # 512
                  transformer_heads: int, # 8
                  transformer_layers: int, # 12
-                 classification: bool
+                 classification: bool,
                  ):
         super().__init__()
 
@@ -263,7 +263,7 @@ class CLIP(nn.Module):
 
         if isinstance(vision_layers, (tuple, list)):
             vision_heads = vision_width * 32 // 64 # 32
-            self.visual = EMGModifiedResNet(
+            self.visual = ModifiedResNet(
                 layers=vision_layers, # (3, 4, 6, 4)
                 output_dim=embed_dim,
                 heads=vision_heads,
@@ -295,9 +295,6 @@ class CLIP(nn.Module):
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-
-        self.dropout = nn.Dropout()
-        self.cnn_projection = nn.Linear(embed_dim, 10)
 
         self.initialize_parameters()
 
@@ -362,8 +359,6 @@ class CLIP(nn.Module):
 
     def forward(self, image, text):
         image_features = self.encode_image(image) # shape(B,8,400,1)
-        if self.classification:
-            return self.cnn_projection(self.dropout(image_features))
         text_features = self.encode_text(text)
 
         # normalized features
@@ -375,7 +370,7 @@ class CLIP(nn.Module):
         logits_per_image = logit_scale * image_features @ text_features.t()
         logits_per_text = logits_per_image.t()
 
-        # shape = [global_batch_size, global_batch_size]
+        # shape = [global_..batch_size, global_batch_size]
         return logits_per_image, logits_per_text
 
 
@@ -509,7 +504,7 @@ class EMGAttentionPool2d(nn.Module): # 25, 2048,             16,             64
     def forward(self, x):
         x = x.flatten(start_dim=2).permute(2, 0, 1)  # NCHW -> (HW)NC
         x = torch.cat([x.mean(dim=0, keepdim=True), x], dim=0)  # (HW+1)NC
-        x = x + self.positional_embedding[:, None, :].to(x.dtype)  # (HW+1)NC
+        x = x + self.positional_embedding[:, None, :].to(x.dtype)  # (HW+1)NC shape(26,16,2048)
         x, _ = F.multi_head_attention_forward(
             query=x[:1], key=x, value=x,
             embed_dim_to_check=x.shape[-1],
@@ -528,7 +523,7 @@ class EMGAttentionPool2d(nn.Module): # 25, 2048,             16,             64
             use_separate_proj_weight=True,
             training=self.training,
             need_weights=False
-        )
+        ) # shape(1,16,2048)
         return x.squeeze(0)
 
 
@@ -541,10 +536,9 @@ class EMGModifiedResNet(nn.Module):
     """
 
     # input shape(B, 8, 400, 1)
-    def __init__(self, layers, output_dim, heads, input_resolution=400, width=64):
+    def __init__(self, layers, output_dim, width=64):
         super().__init__()
         self.output_dim = output_dim
-        self.input_resolution = input_resolution
 
         # the 3-layer stem
         self.conv1 = nn.Conv2d(8, width // 2, kernel_size=(3, 1), stride=(2, 1), padding=(1, 0), bias=False) # shape(B,32,200,1)
@@ -596,50 +590,141 @@ class EMGModifiedResNet(nn.Module):
         return x
 
 
-class ChannelAttention(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(in_channels, in_channels // reduction_ratio),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_channels // reduction_ratio, in_channels)
+class EMGCLIP(nn.Module):
+    def __init__(self,
+                 embed_dim: int, # 512
+                 # vision
+                 image_resolution: int, # 224
+                 vision_layers: Union[Tuple[int, int, int, int], int], # 12
+                 vision_width: int, # 768
+                 vision_patch_size: int, # 32
+                 # text
+                 context_length: int, # 77
+                 vocab_size: int, # 49408
+                 transformer_width: int, # 512
+                 transformer_heads: int, # 8
+                 transformer_layers: int, # 12
+                 classification: bool,
+                 vision_model = 'RN50'
+                 ):
+        super().__init__()
+
+        self.context_length = context_length
+        self.classification = classification
+
+        if vision_model == 'RN50':
+            vision_heads = vision_width * 32 // 64 # 32
+            self.visual = EMGModifiedResNet(
+                layers=vision_layers, # (3, 4, 6, 4)
+                output_dim=embed_dim,
+                heads=vision_heads,
+                input_resolution=image_resolution,
+                width=vision_width
+            )
+        else:
+            vision_heads = vision_width // 64 # 12
+            self.visual = VisionTransformer(
+                input_resolution=image_resolution,
+                patch_size=vision_patch_size,
+                width=vision_width,
+                layers=vision_layers,
+                heads=vision_heads,
+                output_dim=embed_dim
+            )
+
+        self.transformer = Transformer(
+            width=transformer_width,
+            layers=transformer_layers,
+            heads=transformer_heads,
+            attn_mask=self.build_attention_mask()
         )
-        self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * self.sigmoid(y)
+        self.vocab_size = vocab_size
+        self.token_embedding = nn.Embedding(vocab_size, transformer_width) # shape(49408,512)
+        self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width)) # shape(77,512)
+        self.ln_final = LayerNorm(transformer_width)
 
+        self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
+        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-class SpatialAttention(nn.Module):
-    def __init__(self):
-        super(SpatialAttention, self).__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size=7, padding=3)
-        self.sigmoid = nn.Sigmoid()
+        self.dropout = nn.Dropout()
+        self.cnn_projection = nn.Linear(embed_dim, 10)
 
-    def forward(self, x):
-        max_pool = torch.max(x, dim=1, keepdim=True)[0]
-        avg_pool = torch.mean(x, dim=1, keepdim=True)
-        y = torch.cat([max_pool, avg_pool], dim=1)
-        y = self.conv(y)
-        return x * self.sigmoid(y)
+        self.initialize_parameters()
 
+    def initialize_parameters(self):
+        nn.init.normal_(self.token_embedding.weight, std=0.02) # 完成初始化，随机赋值
+        nn.init.normal_(self.positional_embedding, std=0.01)
 
-class CBAM(nn.Module):
-    def __init__(self, in_channels, reduction_ratio=16):
-        super(CBAM, self).__init__()
-        self.channel_attention = ChannelAttention(in_channels, reduction_ratio)
-        self.spatial_attention = SpatialAttention()
+        if isinstance(self.visual, ModifiedResNet):
+            if self.visual.attnpool is not None:
+                std = self.visual.attnpool.c_proj.in_features ** -0.5
+                nn.init.normal_(self.visual.attnpool.q_proj.weight, std=std)
+                nn.init.normal_(self.visual.attnpool.k_proj.weight, std=std)
+                nn.init.normal_(self.visual.attnpool.v_proj.weight, std=std)
+                nn.init.normal_(self.visual.attnpool.c_proj.weight, std=std)
 
-    def forward(self, x):
-        x = self.channel_attention(x)
-        x = self.spatial_attention(x)
+            for resnet_block in [self.visual.layer1, self.visual.layer2, self.visual.layer3, self.visual.layer4]:
+                for name, param in resnet_block.named_parameters():
+                    if name.endswith("bn3.weight"):
+                        nn.init.zeros_(param)
+
+        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
+        attn_std = self.transformer.width ** -0.5
+        fc_std = (2 * self.transformer.width) ** -0.5
+        for block in self.transformer.resblocks:
+            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+
+        if self.text_projection is not None:
+            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
+
+    def build_attention_mask(self):
+        # lazily create causal attention mask, with full attention between the vision tokens
+        # pytorch uses additive attention mask; fill with -inf
+        mask = torch.empty(self.context_length, self.context_length)
+        mask.fill_(float("-inf"))
+        mask.triu_(1)  # zero out the lower diagonal
+        return mask
+
+    @property
+    def dtype(self):
+        return self.visual.conv1.weight.dtype
+
+    def encode_image(self, image):
+        return self.visual(image.type(self.dtype))
+
+    def encode_text(self, text): # shape(3,77)
+        x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model] shape(3,77,512)
+
+        x = x + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype) # shape(3,77,512)
+
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection # (3,512) -> (3,512)
+
         return x
 
+    def forward(self, image, text):
+        image_features = self.encode_image(image) # shape(B,8,400,1)
+        if self.classification:
+            return self.cnn_projection(self.dropout(image_features))
+        text_features = self.encode_text(text)
 
-class EMGCNN(nn.Module):
-    def __init__(self, in_channels, out_channels) -> None:
-        super().__init__()
+        # normalized features
+        image_features = image_features / image_features.norm(dim=1, keepdim=True) # shape(1,512)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True) # shape(3,512)
+
+        # cosine similarity as logits
+        logit_scale = self.logit_scale.exp()
+        logits_per_image = logit_scale * image_features @ text_features.t()
+        logits_per_text = logits_per_image.t()
+
+        # shape = [global_batch_size, global_batch_size]
+        return logits_per_image, logits_per_text

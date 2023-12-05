@@ -121,11 +121,11 @@ def train_one_epoch_signal(model, epoch, epochs, device, train_loader, loss_func
     model.train()
     total_loss = 0.0
     loop = tqdm(train_loader, desc='Train')
-    for _, (window_datas, window_labels) in enumerate(loop): # shape(4,400,8)
-        window_datas = window_datas.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
+    for _, (window_data, window_labels) in enumerate(loop): # shape(4,400,8)
+        window_data = window_data.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
         
-        predicts = model(window_datas, text)
+        predicts = model(window_data, text)
         
         labels = window_labels.to(device).type(torch.long) - 1
         loss = loss_func(predicts, labels)
@@ -206,20 +206,24 @@ def validate_signal(model, device, val_loader, loss_func):
 
 
 # train signal and text jointly
-def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, preprocess, scheduler):
+def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, scheduler, classification=True):
     model.train()
     total_loss = 0.0
     loop = tqdm(train_loader, desc='Train')
-    for _, (window_datas, window_labels) in enumerate(loop): # shape(4,400,8)
-        window_datas = window_datas.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
+    for _, (window_data, window_labels) in enumerate(loop): # shape(4,400,8)
+        window_data = window_data.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
         
-        logits_per_image, logits_per_text = model(window_datas, text)
-        
-        labels = torch.LongTensor(range(len(window_labels))).to(device)
-        loss_I = loss_func(logits_per_image, labels)
-        loss_T = loss_func(logits_per_text, labels)
-        loss = (loss_I + loss_T) / 2
+        if classification:
+            logits_per_image = model(window_data, text)
+            labels = window_labels.to(device).type(torch.long) - 1
+            loss = loss_func(logits_per_image, labels)
+        else:
+            logits_per_image, logits_per_text = model(window_data, text)
+            labels = torch.LongTensor(range(len(window_labels))).to(device)
+            loss_I = loss_func(logits_per_image, labels)
+            loss_T = loss_func(logits_per_text, labels)
+            loss = (loss_I + loss_T) / 2
         total_loss += loss
 
         # backward
@@ -233,7 +237,7 @@ def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss
     save_results('res/results.csv', '%d, %12.6f\n' % (epoch + 1, total_loss))
 
 
-def validate_signal_text(model, device, val_loader, loss_func):
+def validate_signal_text(model, device, val_loader, loss_func, classification=True):
     model.eval()
     total_loss, correct_nums, total_nums = 0.0, 0, 0
     
@@ -243,12 +247,16 @@ def validate_signal_text(model, device, val_loader, loss_func):
         window_data = window_data.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
                 
-        logits_per_image, logits_per_text = model(window_data, text)
-        
-        labels = torch.LongTensor(range(len(window_labels))).to(device)
-        loss_I = loss_func(logits_per_image, labels)
-        loss_T = loss_func(logits_per_text, labels)
-        loss = (loss_I + loss_T) / 2
+        if classification:
+            logits_per_image = model(window_data, text)
+            labels = window_labels.to(device).type(torch.long) - 1
+            loss = loss_func(logits_per_image, labels)
+        else:
+            logits_per_image, logits_per_text = model(window_data, text)
+            labels = torch.LongTensor(range(len(window_labels))).to(device)
+            loss_I = loss_func(logits_per_image, labels)
+            loss_T = loss_func(logits_per_text, labels)
+            loss = (loss_I + loss_T) / 2
         total_loss += loss
 
         predict_idx = logits_per_image.argmax(dim=-1)
@@ -266,7 +274,7 @@ def validate_signal_text(model, device, val_loader, loss_func):
     return correct_nums.item() / total_nums
 
 
-def evaluate_signal_text(model, device, eval_loader, loss_func):
+def evaluate_signal_text(model, device, eval_loader, loss_func, classification=True):
     model.eval() # 精度在64%
     total_loss, correct_nums, total_nums = 0.0, 0, 0
     
@@ -275,12 +283,16 @@ def evaluate_signal_text(model, device, eval_loader, loss_func):
     for i, (window_data, window_labels) in enumerate(loop): # shape(16,400,8)
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
                 
-        logits_per_image, logits_per_text = model(window_data, text)
-        
-        labels = torch.LongTensor(range(len(window_labels))).to(device)
-        loss_I = loss_func(logits_per_image, labels)
-        loss_T = loss_func(logits_per_text, labels)
-        loss = (loss_I + loss_T) / 2
+        if classification:
+            logits_per_image = model(window_data, text)
+            labels = window_labels.to(device).type(torch.long) - 1
+            loss = loss_func(logits_per_image, labels)
+        else:
+            logits_per_image, logits_per_text = model(window_data, text)
+            labels = torch.LongTensor(range(len(window_labels))).to(device)
+            loss_I = loss_func(logits_per_image, labels)
+            loss_T = loss_func(logits_per_text, labels)
+            loss = (loss_I + loss_T) / 2
         total_loss += loss
 
         predict_idx = logits_per_image.argmax(dim=-1)
