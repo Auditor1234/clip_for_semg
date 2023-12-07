@@ -159,14 +159,14 @@ def load_emg_label_from_file(filename, class_type=10):
     return emg, label
 
 
-def window_to_h5py(emg, label, filename, window_size=400):
+def window_to_h5py(emg, label, filename, window_size=400, window_overlap=0):
     window_data = []
     window_label = []
     for i in range(len(label)):
         emg_type = np.array(emg[i])
         window_count = 0
         print('{} emg points found in type {} emg signal.'.format(len(emg_type), label[i]))
-        for j in range(0, len(emg_type) - window_size, window_size):
+        for j in range(0, len(emg_type) - window_size, window_size - window_overlap):
             window_data.append(emg_type[j : j + window_size])
             window_label.append(label[i])
             window_count += 1
@@ -188,9 +188,9 @@ def h5py_to_window(filename):
 
 if __name__ == '__main__':
     filename = 'D:/Download/Datasets/Ninapro/DB2/S1/S1_E1_A1.mat'
-    h5_filename = 'dataset/window.h5'
-    # emg, label = load_emg_label_from_file(filename)
-    # window_to_h5py(emg, label, h5_filename)
+    h5_filename = 'dataset/window_400_200.h5'
+    emg, label = load_emg_label_from_file(filename)
+    window_to_h5py(emg, label, h5_filename, window_overlap=200)
     emg, label = h5py_to_window(h5_filename)
     print(emg.shape)
     print(label.shape)

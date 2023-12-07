@@ -15,7 +15,7 @@ import numpy as np
 def arg_parse():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=16, help="dataset batch size")
-    parser.add_argument("--epochs", type=int, default=100, help="training epochs")
+    parser.add_argument("--epochs", type=int, default=60, help="training epochs")
     parser.add_argument("--lr", type=float, default=0.0004, help="learning rate")
     parser.add_argument("--dataset", type=str, default="./dataset/img", help="dataset directory path")
 
@@ -26,16 +26,19 @@ def main(args):
     
     epochs = args.epochs
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, _ = clip.load("RN50", device=device, vis_pretrain=False)
+
+    filename = 'dataset/window_400_200.h5'
+    weight_path = 'res/best.pt'
+    best_precision, current_precision = 0, 0
+
+    model_dim = 1 # 数据维数 1为(B,8,400,1)，2为(B,1,400,8)
+    classification = True # 是否是分类任务
+    model = clip.EMGload("RN50", device=device, classification=classification, vis_pretrain=False, model_dim=model_dim)
     
     # optimizer = Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.2)
     optimizer = Adam(model.parameters(), lr=args.lr, eps=1e-3)
     scheduler = lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
     loss_func = nn.CrossEntropyLoss()
-
-    filename = 'dataset/window.h5'
-    weight_path = 'res/best.pt'
-    best_precision, current_precision = 0, 0
 
     emg, label = h5py_to_window(filename)
     data_len = len(label)
@@ -74,22 +77,27 @@ def main(args):
                     num_workers=0
                     )
 
-
+    if classification:
+        print('-------- Classification task --------')
+    else:
+        print('-------- Pair task --------')
+    print("{}D signal input.".format(model_dim))
     model.train().half()
     model.to(device)
     print("start training...")
     for epoch in range(epochs):
-        train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, scheduler)
-        current_precision = validate_signal_text(model, device, val_loader, loss_func)
+        train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, 
+                                    optimizer, scheduler, classification=classification, model_dim=model_dim)
+        current_precision = validate_signal_text(model, device, val_loader, loss_func, classification=classification, model_dim=model_dim)
 
         if current_precision > best_precision:
             best_precision = current_precision
-            print('Current best precision in val set is:%.4f' % (best_precision * 100) + '%')
+            print('Current best precision in val set is: %.4f' % (best_precision * 100) + '%')
             save_model_weight(model=model, filename=weight_path)
 
 
     model.load_state_dict(torch.load(weight_path))
-    evaluate_signal_text(model, device, eval_loader, loss_func)
+    evaluate_signal_text(model, device, eval_loader, loss_func, classification=classification, model_dim=model_dim)
 
 if  __name__ == "__main__":
     args = arg_parse()

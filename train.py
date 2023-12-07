@@ -206,12 +206,19 @@ def validate_signal(model, device, val_loader, loss_func):
 
 
 # train signal and text jointly
-def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, scheduler, classification=True):
-    model.train()
+def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss_func, optimizer, scheduler, classification, model_dim=2):
+    # 最好的分类概率是EMGModifiedResNet2D，使用window_400_200.h5，得到的验证集86%，测试集82%
+    # 最好的配对概率是EMGModifiedResNet2D，使用window_400_200.h5，得到的验证集63%，测试集63%
+    model.train() 
     total_loss = 0.0
-    loop = tqdm(train_loader, desc='Train')
-    for _, (window_data, window_labels) in enumerate(loop): # shape(4,400,8)
-        window_data = window_data.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
+    loop = tqdm(train_loader, desc='Train', ncols=150)
+    for _, (window_data, window_labels) in enumerate(loop): # shape(B,400,8)
+        if model_dim == 1:
+            window_data = window_data.transpose(1, 2).unsqueeze(-1) # shape(B,8,400,1)
+        else:
+            window_data = window_data.unsqueeze(1) # shape(B,1,400,8)
+        window_data = window_data.to(device).type(torch.float32)
+
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
         
         if classification:
@@ -231,20 +238,25 @@ def train_one_epoch_signal_text(model, epoch, epochs, device, train_loader, loss
         loss.backward()
         optimizer.step()
         loop.set_description(f'Epoch [{epoch+1}/{epochs}]')
-        loop.set_postfix(loss = loss.item())
+        loop.set_postfix(loss = '%.6f' % loss.item())
     scheduler.step()
     print("[%d/%d] epoch's total loss = %f" % (epoch + 1, epochs, total_loss))
     save_results('res/results.csv', '%d, %12.6f\n' % (epoch + 1, total_loss))
 
 
-def validate_signal_text(model, device, val_loader, loss_func, classification=True):
+def validate_signal_text(model, device, val_loader, loss_func, classification, model_dim=2):
     model.eval()
     total_loss, correct_nums, total_nums = 0.0, 0, 0
     
     print("Validating...")
-    loop = tqdm(val_loader, desc='Train')
-    for i, (window_data, window_labels) in enumerate(loop): # shape(4,400,8)
-        window_data = window_data.transpose(1, 2).unsqueeze(-1).to(device).type(torch.float32) # shape(4,8,400,1)
+    loop = tqdm(val_loader, desc='Validation', ncols=100)
+    for i, (window_data, window_labels) in enumerate(loop): # shape(B,400,8)
+        if model_dim == 1:
+            window_data = window_data.transpose(1, 2).unsqueeze(-1) # shape(B,8,400,1)
+        else:
+            window_data = window_data.unsqueeze(1) # shape(B,1,400,8)
+        window_data = window_data.to(device).type(torch.float32)
+
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
                 
         if classification:
@@ -267,24 +279,29 @@ def validate_signal_text(model, device, val_loader, loss_func, classification=Tr
         loop.set_postfix(loss = loss.item())
 
     precision = '%.4f' % (100 * correct_nums / total_nums) + '%'
-    print("Validation:")
     print("Total loss: {}".format(total_loss))
     print("Correct/Total: {}/{}".format(correct_nums, total_nums))
     print("Precision:", precision)
     return correct_nums.item() / total_nums
 
 
-def evaluate_signal_text(model, device, eval_loader, loss_func, classification=True):
+def evaluate_signal_text(model, device, eval_loader, loss_func, classification, model_dim=2):
     model.eval() # 精度在64%
     total_loss, correct_nums, total_nums = 0.0, 0, 0
     
-    print("Evaluating...")
+    print("\nEvaluating...")
     loop = tqdm(eval_loader, desc='Evaluation')
-    for i, (window_data, window_labels) in enumerate(loop): # shape(16,400,8)
+    for i, (window_data, window_labels) in enumerate(loop): # shape(B,400,8)
+        if model_dim == 1:
+            window_data = window_data.transpose(1, 2).unsqueeze(-1) # shape(B,8,400,1)
+        else:
+            window_data = window_data.unsqueeze(1) # shape(B,1,400,8)
+        window_data = window_data.to(device).type(torch.float32)
+
         text = clip.tokenize([template + prompts[mov_idx + 12] for mov_idx in window_labels]).to(device)
                 
         if classification:
-            logits_per_image = model(window_data, text)
+            logits_per_image = model(window_data, text) # shape(B,10)
             labels = window_labels.to(device).type(torch.long) - 1
             loss = loss_func(logits_per_image, labels)
         else:
@@ -303,7 +320,6 @@ def evaluate_signal_text(model, device, eval_loader, loss_func, classification=T
         loop.set_postfix(loss = loss.item())
     
     precision = '%.4f' % (100 * correct_nums / total_nums) + '%'
-    print("Evalution:")
     print("Total loss: {}".format(total_loss))
     print("Correct/Total: {}/{}".format(correct_nums, total_nums))
     print("Precision:", precision)

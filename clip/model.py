@@ -527,7 +527,7 @@ class EMGAttentionPool2d(nn.Module): # 25, 2048,             16,             64
         return x.squeeze(0)
 
 
-class EMGModifiedResNet(nn.Module):
+class EMGModifiedResNet1D(nn.Module):
     """
     A ResNet class that is similar to torchvision's but contains the following changes:
     - There are now 3 "stem" convolutions as opposed to 1, with an average pool instead of a max pool.
@@ -559,8 +559,8 @@ class EMGModifiedResNet(nn.Module):
         self.layer3 = self._make_layer(width * 4, layers[2], stride=2) # shape(B,1024,25,1)
         self.layer4 = self._make_layer(width * 8, layers[3], stride=1) # shape(B,2048,25,1)
 
-        embed_dim = width * 32  # the ResNet feature dimension
-        self.attnpool = EMGAttentionPool2d(25, embed_dim, 16, output_dim)
+        embed_dim = width * 8  # the ResNet feature dimension
+        self.attnpool = EMGAttentionPool2d(50, embed_dim, 16, output_dim)
 
     def _make_layer(self, planes, blocks, stride=1):
         layers = [EMGBottleneck(self._inplanes, planes, stride)]
@@ -583,8 +583,71 @@ class EMGModifiedResNet(nn.Module):
         x = stem(x)
         x = self.layer1(x) # shape(B,256,100,1)
         x = self.layer2(x) # shape(B,512,50,1)
-        x = self.layer3(x) # shape(B,1024,25,1)
-        x = self.layer4(x) # shape(B,2048,25,1)
+        # x = self.layer3(x) # shape(B,1024,25,1)
+        # x = self.layer4(x) # shape(B,2048,25,1)
+        x = self.attnpool(x) # shape(B,1024)
+
+        return x
+
+
+class EMGModifiedResNet2D(nn.Module):
+    """
+    A ResNet class that is similar to torchvision's but contains the following changes:
+    - There are now 3 "stem" convolutions as opposed to 1, with an average pool instead of a max pool.
+    - Performs anti-aliasing strided convolutions, where an avgpool is prepended to convolutions with stride > 1
+    - The final pooling layer is a QKV attention instead of an average pool
+    """
+
+    # input shape(B, 1, 400, 8)
+    def __init__(self, layers, output_dim, width=64):
+        super().__init__()
+        self.output_dim = output_dim
+
+        # the 3-layer stem
+        self.conv1 = nn.Conv2d(1, width // 2, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False) # shape(B,32,200,4)
+        self.bn1 = nn.BatchNorm2d(width // 2)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(width // 2, width // 2, kernel_size=(3, 3), padding=(1, 1), bias=False) # shape(B,32,200,4)
+        self.bn2 = nn.BatchNorm2d(width // 2)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv3 = nn.Conv2d(width // 2, width, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False) # shape(B,64,100,2)
+        self.bn3 = nn.BatchNorm2d(width)
+        self.relu3 = nn.ReLU(inplace=True)
+        self.avgpool = nn.AvgPool2d((2, 2)) # shape(B,64,50,1)
+
+        # residual layers
+        self._inplanes = width  # this is a *mutable* variable used during construction
+        self.layer1 = self._make_layer(width, layers[0]) # shape(B,256,50,1)
+        self.layer2 = self._make_layer(width * 2, layers[1], stride=1) # shape(B,512,50,1)
+        self.layer3 = self._make_layer(width * 4, layers[2], stride=1) # shape(B,1024,25,1)
+        self.layer4 = self._make_layer(width * 8, layers[3], stride=1) # shape(B,2048,25,1)
+
+        embed_dim = width * 8  # the ResNet feature dimension
+        self.attnpool = EMGAttentionPool2d(50, embed_dim, 16, output_dim)
+
+    def _make_layer(self, planes, blocks, stride=1):
+        layers = [EMGBottleneck(self._inplanes, planes, stride)]
+
+        self._inplanes = planes * EMGBottleneck.expansion
+        for _ in range(1, blocks):
+            layers.append(EMGBottleneck(self._inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        def stem(x):
+            x = self.relu1(self.bn1(self.conv1(x))) # shape(B,32,200,4)
+            x = self.relu2(self.bn2(self.conv2(x))) # shape(B,32,200,4)
+            x = self.relu3(self.bn3(self.conv3(x))) # shape(B,64,200,4)
+            x = self.avgpool(x) # shape(B,64,100,2)
+            return x
+
+        x = x.type(self.conv1.weight.dtype)
+        x = stem(x)
+        x = self.layer1(x) # shape(B,256,100,1)
+        x = self.layer2(x) # shape(B,512,50,1)
+        # x = self.layer3(x) # shape(B,1024,25,2)
+        # x = self.layer4(x) # shape(B,2048,25,1)
         x = self.attnpool(x) # shape(B,1024)
 
         return x
@@ -593,11 +656,6 @@ class EMGModifiedResNet(nn.Module):
 class EMGCLIP(nn.Module):
     def __init__(self,
                  embed_dim: int, # 512
-                 # vision
-                 image_resolution: int, # 224
-                 vision_layers: Union[Tuple[int, int, int, int], int], # 12
-                 vision_width: int, # 768
-                 vision_patch_size: int, # 32
                  # text
                  context_length: int, # 77
                  vocab_size: int, # 49408
@@ -605,33 +663,39 @@ class EMGCLIP(nn.Module):
                  transformer_heads: int, # 8
                  transformer_layers: int, # 12
                  classification: bool,
-                 vision_model = 'RN50'
+                 vision_model = 'RN50',
+                 model_dim=2
                  ):
         super().__init__()
 
         self.context_length = context_length
         self.classification = classification
 
+        # signal
         if vision_model == 'RN50':
-            vision_heads = vision_width * 32 // 64 # 32
-            self.visual = EMGModifiedResNet(
-                layers=vision_layers, # (3, 4, 6, 4)
-                output_dim=embed_dim,
-                heads=vision_heads,
-                input_resolution=image_resolution,
-                width=vision_width
-            )
+            if model_dim == 1:
+                self.visual = EMGModifiedResNet1D(
+                    layers=(3,4,6,4), # (3, 4, 6, 4)
+                    output_dim=embed_dim,
+                    width=64
+                )
+            else:
+                self.visual = EMGModifiedResNet2D(
+                    layers=(3,4,6,4), # (3, 4, 6, 4)
+                    output_dim=embed_dim,
+                    width=64
+                )
         else:
-            vision_heads = vision_width // 64 # 12
             self.visual = VisionTransformer(
-                input_resolution=image_resolution,
-                patch_size=vision_patch_size,
-                width=vision_width,
-                layers=vision_layers,
-                heads=vision_heads,
+                input_resolution=224,
+                patch_size=32,
+                width=768,
+                layers=12,
+                heads=12,
                 output_dim=embed_dim
             )
 
+        # text
         self.transformer = Transformer(
             width=transformer_width,
             layers=transformer_layers,
@@ -648,7 +712,7 @@ class EMGCLIP(nn.Module):
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.dropout = nn.Dropout()
-        self.cnn_projection = nn.Linear(embed_dim, 10)
+        self.class_projection = nn.Linear(embed_dim, 10)
 
         self.initialize_parameters()
 
@@ -714,7 +778,7 @@ class EMGCLIP(nn.Module):
     def forward(self, image, text):
         image_features = self.encode_image(image) # shape(B,8,400,1)
         if self.classification:
-            return self.cnn_projection(self.dropout(image_features))
+            return self.class_projection(self.dropout(image_features))
         text_features = self.encode_text(text)
 
         # normalized features
@@ -728,3 +792,33 @@ class EMGCLIP(nn.Module):
 
         # shape = [global_batch_size, global_batch_size]
         return logits_per_image, logits_per_text
+
+
+
+def EMGbuild_model(state_dict: dict, classification, vis_pretrain=True, vision_model='RN50', model_dim=2):
+    # text
+    embed_dim = state_dict["text_projection"].shape[1]
+    context_length = state_dict["positional_embedding"].shape[0]
+    vocab_size = state_dict["token_embedding.weight"].shape[0]
+    transformer_width = state_dict["ln_final.weight"].shape[0]
+    transformer_heads = transformer_width // 64
+    transformer_layers = len(set(k.split(".")[2] for k in state_dict if k.startswith("transformer.resblocks")))
+
+    model = EMGCLIP(
+        embed_dim,
+        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers, classification,
+        vision_model=vision_model, model_dim=model_dim
+    )
+
+    for key in ["input_resolution", "context_length", "vocab_size"]:
+        if key in state_dict:
+            del state_dict[key]
+    
+    if not vis_pretrain:
+        for key in list(state_dict.keys()):
+            if 'visual' in key:
+                del state_dict[key]
+
+    convert_weights(model)
+    model.load_state_dict(state_dict, strict=False)
+    return model.eval()

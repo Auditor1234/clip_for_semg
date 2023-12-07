@@ -10,7 +10,7 @@ from PIL import Image
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 from tqdm import tqdm
 
-from .model import build_model
+from .model import build_model, EMGbuild_model
 from .simple_tokenizer import SimpleTokenizer as _Tokenizer
 
 try:
@@ -24,7 +24,7 @@ if packaging.version.parse(torch.__version__) < packaging.version.parse("1.7.1")
     warnings.warn("PyTorch version 1.7.1 or higher is recommended")
 
 
-__all__ = ["available_models", "load", "tokenize"]
+__all__ = ["available_models", "load", "tokenize", "EMGload"]
 _tokenizer = _Tokenizer()
 
 _MODELS = {
@@ -244,3 +244,22 @@ def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: b
         result[i, :len(tokens)] = torch.tensor(tokens)
 
     return result
+
+
+def EMGload(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_available() else "cpu", 
+         download_root: str = None, classification=True, vis_pretrain=True, model_dim=2):
+    
+    if name in _MODELS:
+        model_path = _download(_MODELS[name], download_root or os.path.expanduser("~/.cache/clip"))
+    elif os.path.isfile(name):
+        model_path = name
+    else:
+        raise RuntimeError(f"Model {name} not found; available models = {available_models()}")
+
+    with open(model_path, 'rb') as opened_file:
+        model = torch.jit.load(opened_file, map_location="cpu").eval()
+
+    model = EMGbuild_model(model.state_dict(), classification=classification, vis_pretrain=vis_pretrain, model_dim=model_dim).to(device)
+    if str(device) == "cpu":
+        model.float()
+    return model
