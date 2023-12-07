@@ -259,7 +259,7 @@ def EMGload(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.i
     with open(model_path, 'rb') as opened_file:
         model = torch.jit.load(opened_file, map_location="cpu").eval()
 
-    model = EMGbuild_model(model.state_dict(), classification=classification, vis_pretrain=vis_pretrain, model_dim=model_dim).to(device)
+    model = EMGbuild_model(model.state_dict(), classification=classification, vis_pretrain=vis_pretrain, emg_model=name, model_dim=model_dim).to(device)
     if str(device) == "cpu":
         model.float()
     return model

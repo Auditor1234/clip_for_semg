@@ -27,13 +27,13 @@ def main(args):
     epochs = args.epochs
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    filename = 'dataset/window_400_200.h5'
+    filename = 'dataset/window_400_300.h5'
     weight_path = 'res/best.pt'
     best_precision, current_precision = 0, 0
 
-    model_dim = 1 # 数据维数 1为(B,8,400,1)，2为(B,1,400,8)
-    classification = True # 是否是分类任务
-    model = clip.EMGload("RN50", device=device, classification=classification, vis_pretrain=False, model_dim=model_dim)
+    model_dim = 2 # 数据维数 1为(B,8,400,1)，2为(B,1,400,8)
+    classification = False # 是否是分类任务
+    model = clip.EMGload("ViT-B/32", device=device, classification=classification, vis_pretrain=False, model_dim=model_dim)
     
     # optimizer = Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.98), weight_decay=0.2)
     optimizer = Adam(model.parameters(), lr=args.lr, eps=1e-3)
@@ -92,10 +92,9 @@ def main(args):
 
         if current_precision > best_precision:
             best_precision = current_precision
-            print('Current best precision in val set is: %.4f' % (best_precision * 100) + '%')
             save_model_weight(model=model, filename=weight_path)
 
-
+    print('\nCurrent best precision in val set is: %.4f' % (best_precision * 100) + '%')
     model.load_state_dict(torch.load(weight_path))
     evaluate_signal_text(model, device, eval_loader, loss_func, classification=classification, model_dim=model_dim)
 

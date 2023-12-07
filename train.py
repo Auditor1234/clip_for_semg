@@ -276,7 +276,7 @@ def validate_signal_text(model, device, val_loader, loss_func, classification, m
         total_nums += len(predict_idx)
 
         loop.set_description(f'Validating [{i + 1}/{len(val_loader)}]')
-        loop.set_postfix(loss = loss.item())
+        loop.set_postfix(loss = '%.6f' % loss.item())
 
     precision = '%.4f' % (100 * correct_nums / total_nums) + '%'
     print("Total loss: {}".format(total_loss))
@@ -289,7 +289,7 @@ def evaluate_signal_text(model, device, eval_loader, loss_func, classification, 
     model.eval() # 精度在64%
     total_loss, correct_nums, total_nums = 0.0, 0, 0
     
-    print("\nEvaluating...")
+    print("Evaluating...")
     loop = tqdm(eval_loader, desc='Evaluation')
     for i, (window_data, window_labels) in enumerate(loop): # shape(B,400,8)
         if model_dim == 1:
@@ -317,7 +317,7 @@ def evaluate_signal_text(model, device, eval_loader, loss_func, classification, 
         total_nums += len(predict_idx)
 
         loop.set_description(f'Evaluating [{i + 1}/{len(eval_loader)}]')
-        loop.set_postfix(loss = loss.item())
+        loop.set_postfix(loss = '%.6f' % loss.item())
     
     precision = '%.4f' % (100 * correct_nums / total_nums) + '%'
     print("Total loss: {}".format(total_loss))

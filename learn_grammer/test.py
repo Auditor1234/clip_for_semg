@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 import numpy as np
+
 from torchvision.transforms import ToTensor
 
 # print(torch.ones([])) # 每个tensor值为1
@@ -44,7 +45,7 @@ from torchvision.transforms import ToTensor
 
 # model = nn.LayerNorm(4) # 总体标准差
 # x = torch.tensor(range(12), dtype=torch.float32).reshape(3, 4)
-# print(model(x))
+# print(model(x)) # 对最后一维进行标准化，shape(3,4)
 
 
 # image = Image.open('CLIP.png')
@@ -157,3 +158,5 @@ from torchvision.transforms import ToTensor
 
 x = torch.rand(4, 5)
 print(x[:1].shape)
+print(x[0,:].shape)
+print(x.dim())

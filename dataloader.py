@@ -188,9 +188,9 @@ def h5py_to_window(filename):
 
 if __name__ == '__main__':
     filename = 'D:/Download/Datasets/Ninapro/DB2/S1/S1_E1_A1.mat'
-    h5_filename = 'dataset/window_400_200.h5'
+    h5_filename = 'dataset/window_400_300.h5'
     emg, label = load_emg_label_from_file(filename)
-    window_to_h5py(emg, label, h5_filename, window_overlap=200)
+    window_to_h5py(emg, label, h5_filename, window_overlap=300)
     emg, label = h5py_to_window(h5_filename)
     print(emg.shape)
     print(label.shape)

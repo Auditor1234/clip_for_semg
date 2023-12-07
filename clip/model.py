@@ -653,6 +653,84 @@ class EMGModifiedResNet2D(nn.Module):
         return x
 
 
+class EMGVisionTransformer1D(nn.Module): # 400      8             512         12           12            512
+    # input shape(B,8,400,1)
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.output_dim = output_dim
+        self.conv1 = nn.Conv2d(in_channels=8, out_channels=width, kernel_size=(patch_size, 1), stride=(patch_size, 1), bias=False)
+
+        scale = width ** -0.5
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) + 1, width))
+        self.ln_pre = LayerNorm(width)
+
+        self.transformer = Transformer(width, layers, heads)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+
+    def forward(self, x: torch.Tensor):
+        # shape(B,8,400,1)
+        x = self.conv1(x)  # shape(B,width,50,1)
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape(B,width,50)
+        x = x.permute(0, 2, 1)  # shape(B,50,width)
+        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape(B,50 + 1,width)
+        x = x + self.positional_embedding.to(x.dtype) # shape(B,51,width)
+        x = self.ln_pre(x) # shape(B,51,width)
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x) # shape(51,B,width)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+
+        x = self.ln_post(x[:, 0, :]) # shape(B,width)
+
+        if self.proj is not None:
+            x = x @ self.proj
+
+        return x # shape(1,512)
+
+
+class EMGVisionTransformer2D(nn.Module): # 400      8             512         12           12            512
+    # input shape(B,1,400,8)
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.output_dim = output_dim
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=width, kernel_size=(patch_size, patch_size), stride=(patch_size, 1), bias=False)
+
+        scale = width ** -0.5
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) + 1, width))
+        self.ln_pre = LayerNorm(width)
+
+        self.transformer = Transformer(width, layers, heads)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+
+    def forward(self, x: torch.Tensor):
+        # shape(B,8,400,1)
+        x = self.conv1(x)  # shape(B,width,50,1)
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape(B,width,50)
+        x = x.permute(0, 2, 1)  # shape(B,50,width)
+        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape(B,50 + 1,width)
+        x = x + self.positional_embedding.to(x.dtype) # shape(B,51,width)
+        x = self.ln_pre(x) # shape(B,51,width)
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x) # shape(51,B,width)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+
+        x = self.ln_post(x[:, 0, :]) # shape(B,width)
+
+        if self.proj is not None:
+            x = x @ self.proj
+
+        return x # shape(1,512)
+
+
 class EMGCLIP(nn.Module):
     def __init__(self,
                  embed_dim: int, # 512
@@ -663,7 +741,7 @@ class EMGCLIP(nn.Module):
                  transformer_heads: int, # 8
                  transformer_layers: int, # 12
                  classification: bool,
-                 vision_model = 'RN50',
+                 emg_model = 'RN50',
                  model_dim=2
                  ):
         super().__init__()
@@ -672,7 +750,7 @@ class EMGCLIP(nn.Module):
         self.classification = classification
 
         # signal
-        if vision_model == 'RN50':
+        if emg_model == 'RN50':
             if model_dim == 1:
                 self.visual = EMGModifiedResNet1D(
                     layers=(3,4,6,4), # (3, 4, 6, 4)
@@ -686,14 +764,24 @@ class EMGCLIP(nn.Module):
                     width=64
                 )
         else:
-            self.visual = VisionTransformer(
-                input_resolution=224,
-                patch_size=32,
-                width=768,
-                layers=12,
-                heads=12,
-                output_dim=embed_dim
-            )
+            if model_dim == 1:
+                self.visual = EMGVisionTransformer1D(
+                    input_resolution=400,
+                    patch_size=8,
+                    width=512,
+                    layers=12,
+                    heads=8,
+                    output_dim=embed_dim
+                )
+            else:
+                self.visual = EMGVisionTransformer2D(
+                    input_resolution=400,
+                    patch_size=8,
+                    width=512,
+                    layers=12,
+                    heads=8,
+                    output_dim=embed_dim
+                )
 
         # text
         self.transformer = Transformer(
@@ -795,7 +883,7 @@ class EMGCLIP(nn.Module):
 
 
 
-def EMGbuild_model(state_dict: dict, classification, vis_pretrain=True, vision_model='RN50', model_dim=2):
+def EMGbuild_model(state_dict: dict, classification, vis_pretrain=True, emg_model='RN50', model_dim=2):
     # text
     embed_dim = state_dict["text_projection"].shape[1]
     context_length = state_dict["positional_embedding"].shape[0]
@@ -807,7 +895,7 @@ def EMGbuild_model(state_dict: dict, classification, vis_pretrain=True, vision_m
     model = EMGCLIP(
         embed_dim,
         context_length, vocab_size, transformer_width, transformer_heads, transformer_layers, classification,
-        vision_model=vision_model, model_dim=model_dim
+        emg_model=emg_model, model_dim=model_dim
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:
@@ -820,5 +908,5 @@ def EMGbuild_model(state_dict: dict, classification, vis_pretrain=True, vision_m
                 del state_dict[key]
 
     convert_weights(model)
-    model.load_state_dict(state_dict, strict=False)
+    # model.load_state_dict(state_dict, strict=False)
     return model.eval()
