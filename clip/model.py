@@ -607,9 +607,9 @@ class EMGModifiedResNet2D(nn.Module):
         self.conv1 = nn.Conv2d(1, width // 2, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False) # shape(B,32,200,4)
         self.bn1 = nn.BatchNorm2d(width // 2)
         self.relu1 = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(width // 2, width // 2, kernel_size=(3, 3), padding=(1, 1), bias=False) # shape(B,32,200,4)
-        self.bn2 = nn.BatchNorm2d(width // 2)
-        self.relu2 = nn.ReLU(inplace=True)
+        # self.conv2 = nn.Conv2d(width // 2, width // 2, kernel_size=(3, 3), padding=(1, 1), bias=False) # shape(B,32,200,4)
+        # self.bn2 = nn.BatchNorm2d(width // 2)
+        # self.relu2 = nn.ReLU(inplace=True)
         self.conv3 = nn.Conv2d(width // 2, width, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False) # shape(B,64,100,2)
         self.bn3 = nn.BatchNorm2d(width)
         self.relu3 = nn.ReLU(inplace=True)
@@ -618,12 +618,12 @@ class EMGModifiedResNet2D(nn.Module):
         # residual layers
         self._inplanes = width  # this is a *mutable* variable used during construction
         self.layer1 = self._make_layer(width, layers[0]) # shape(B,256,50,1)
-        self.layer2 = self._make_layer(width * 2, layers[1], stride=1) # shape(B,512,50,1)
+        self.layer2 = self._make_layer(width * 2, layers[1], stride=2) # shape(B,512,50,1)
         self.layer3 = self._make_layer(width * 4, layers[2], stride=1) # shape(B,1024,25,1)
         self.layer4 = self._make_layer(width * 8, layers[3], stride=1) # shape(B,2048,25,1)
 
         embed_dim = width * 8  # the ResNet feature dimension
-        self.attnpool = EMGAttentionPool2d(50, embed_dim, 16, output_dim)
+        self.attnpool = EMGAttentionPool2d(25, embed_dim, 32, output_dim)
 
     def _make_layer(self, planes, blocks, stride=1):
         layers = [EMGBottleneck(self._inplanes, planes, stride)]
@@ -637,7 +637,7 @@ class EMGModifiedResNet2D(nn.Module):
     def forward(self, x):
         def stem(x):
             x = self.relu1(self.bn1(self.conv1(x))) # shape(B,32,200,4)
-            x = self.relu2(self.bn2(self.conv2(x))) # shape(B,32,200,4)
+            # x = self.relu2(self.bn2(self.conv2(x))) # shape(B,32,200,4)
             x = self.relu3(self.bn3(self.conv3(x))) # shape(B,64,200,4)
             x = self.avgpool(x) # shape(B,64,100,2)
             return x
@@ -777,9 +777,9 @@ class EMGCLIP(nn.Module):
                 self.visual = EMGVisionTransformer2D(
                     input_resolution=400,
                     patch_size=8,
-                    width=512,
+                    width=64,
                     layers=12,
-                    heads=8,
+                    heads=32,
                     output_dim=embed_dim
                 )
 
