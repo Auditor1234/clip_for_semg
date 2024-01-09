@@ -3,7 +3,7 @@ import torch
 import argparse
 
 from torch.optim import lr_scheduler, SGD, Adam
-from dataloader import SignalWindow, h5py_to_window, split_window_ration, load_emg_label_from_file
+from dataloader import SignalWindow, h5py_to_window, split_window_ration, load_emg_label_from_file, filter_signals
 from torch.utils.data import DataLoader
 from train import train_one_epoch_signal_text, validate_signal_text, evaluate_signal_text
 from utils import setup_seed, save_model_weight
@@ -27,7 +27,7 @@ def main(args):
     epochs = args.epochs
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
-    filename = 'dataset/window.h5'
+    filename = 'dataset/window_400_300.h5'
     weight_path = 'res/best1.pt'
     best_precision, current_precision = 0, 0
 
@@ -61,16 +61,18 @@ def main(args):
     eval_emg = emg[train_len + val_len :]
     eval_label = label[train_len + val_len :]
 
-    # data_filename = 'D:/Download/Datasets/Ninapro/DB2/S1/S1_E1_A1.mat'
-    # emg, label = load_emg_label_from_file(data_filename)
-    # # [(4,1,1), 200] [(2,1,1), 300]
-    # train_emg, train_label, val_emg, val_label, eval_emg, eval_label = split_window_ration(emg, label, (2,1,1), window_overlap=300)
-    # train_index = np.random.permutation(len(train_emg))
-    # val_index = np.random.permutation(len(val_emg))
-    # eval_index = np.random.permutation(len(eval_emg))
-    # train_emg, train_label = train_emg[train_index] * 20000, train_label[train_index]
-    # val_emg, val_label = val_emg[val_index] * 20000, val_label[val_index]
-    # eval_emg, eval_label = eval_emg[eval_index] * 20000, eval_label[eval_index]
+    data_filename = 'D:/Download/Datasets/Ninapro/DB2/DB2_s1/S1_E1_A1.mat'
+    emg, label = load_emg_label_from_file(data_filename)
+    for i in range(len(emg)):
+        emg[i] = filter_signals(np.array(emg[i]).T, fs=2000).T
+    # [(4,1,1), 200] [(2,1,1), 300]
+    train_emg, train_label, val_emg, val_label, eval_emg, eval_label = split_window_ration(emg, label, (4,1,1), window_overlap=200)
+    train_index = np.random.permutation(len(train_emg))
+    val_index = np.random.permutation(len(val_emg))
+    eval_index = np.random.permutation(len(eval_emg))
+    train_emg, train_label = train_emg[train_index] * 20000, train_label[train_index]
+    val_emg, val_label = val_emg[val_index] * 20000, val_label[val_index]
+    eval_emg, eval_label = eval_emg[eval_index] * 20000, eval_label[eval_index]
 
     train_loader = DataLoader(
                     SignalWindow(train_emg, train_label),

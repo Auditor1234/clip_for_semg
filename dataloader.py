@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import h5py
+from scipy.signal import butter, sosfilt
 
 
 class SignalTo2D(Dataset):
@@ -229,6 +230,18 @@ def split_window_ration(emg, label, ratio, window_overlap=200):
     eval_label = np.array(eval_label)
     return train_emg, train_label, val_emg, val_label, eval_emg, eval_label
 
+
+def filter_signals(signal, fs):
+    """
+    Extracts the envelopes of the multi-channel sEMG signal as described in [1]
+    :param signal: The multi channel sEMG signal, shape = (no_channels, no_samples)
+    :return: the signal envelopes of the multi-channel signals, shape = (no_channels, no_samples)
+    """
+    signal = np.abs(signal)  # full wave rectification
+    lpf = butter(2, 1, 'lowpass', analog=False, fs=fs,
+                 output='sos')  # define the low pass filter (Butterworth 2-order fc = 1Hz)
+    filtered_signal = sosfilt(lpf, signal)
+    return filtered_signal
 
 if __name__ == '__main__':
     filename = 'D:/Download/Datasets/Ninapro/DB2/S1/S1_E1_A1.mat'
